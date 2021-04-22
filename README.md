@@ -37,6 +37,8 @@ To limit the data’s exposure to singular events and trends, I have gather twee
 
 Currently I have been able to collect 97.287 tweets from the period. All the tweets are written in the English language and related to S&P500 index. The S&P500 index is chosen to adequately reflect the wide spectrum of US companies and their industries.
 
+_The code for extracting the tweets has not been included, since it includes confidential API access codes to my Academic Account on Twitter_. 
+
 ## Stock market data
 
 The financial data is gathered from Yahoo Finance covering the same period. For the price I will use the closing price for each day.
