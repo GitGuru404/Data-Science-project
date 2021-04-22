@@ -4,6 +4,7 @@ This repository contains the current code base used for my Data Science project 
 
 The project is written in R-Studio with the extension R-markdown. The file can be opened as a regular R-file, but note this could entail some issues with the free written text. 
 
+Note: This is still a work in progress, but I hope you find it relevant as I do for a Data Science intern. 
 
 # Introduction 
 
