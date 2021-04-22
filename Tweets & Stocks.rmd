@@ -273,11 +273,6 @@ sentiment.score <- data.frame(
 sentiment.score
 ```
 
-```{r}
-
-str(df)
-```
-
 
 
 ```{r message=FALSE, warning=FALSE}
@@ -286,7 +281,7 @@ library(tidyverse)
 library(dplyr)
 library(lubridate)
 
-sentiment.score$date <- as.Date(sentiment.score$date,"%Y-%M-D")
+sentiment.score$date <- ymd(sentiment.score$date)
 
 df <- sentiment.score %>% 
   group_by(month = floor_date(date, unit = "month")) %>% 
