@@ -1,0 +1,585 @@
+---
+title: "Tweets & Stocks"
+author: "Daniel"
+date: "21/4/2021"
+output: 
+  html_document:
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+    number_sections: yes
+    theme: journal
+    highlight: haddock
+    code_folding: show
+    fig_caption: yes
+---
+
+# Introduction 
+
+The use of social media has since its birth in the late 1990’s seen an exponential growth in its use worldwide. Social media has changed the whole foundation of transmitting information. It has become easier to both collect and share subjective financial information and when the number of followers online reach millions, this replicating effect may have noticeable effects on the stock market. A number of online communities have been observed collectively agreeing on, and purchasing large quantities of stocks and commodities  (e.g. GameStop and Bitcoin) resulting in the inflation or deflation of prices. One can argue that people are lured into a type of pyramidal system, where herd instinct and feeling of a missed opportunity is triggered, which convinces them to buy out of fear of missing out. Thus, I intend to examine whether certain posts on social media can be a natural precursor to actual behaviour in the stock market.
+
+*Research Question: To what extent does social media sentiment influence the market valuation of a stock?* 
+
+# Theoretical background
+
+Can the stock market be predicted? A growing body of related research contributes with various perspectives on this matter from areas such as behavioral finance, behavioral economics, and psychology.
+
+_I will not be going in-depth with related work in this notebook, but I can provide you with a full review should you be interested._ 
+
+Based on previous studies and related work, I find it reasonable to state the following hypothesis: 
+
++ H1: Social sentiment in tweets influences stock price movements
+
++ H2: The sender’s profile is important for the level of exposure (volume) of Twitter tweets.
+
++ H3: The volume of Twitter tweets has an effect on stock price movements
+
+
+# Method (in short)
+
+## Data from Twitter
+
+I have chosen to examine relevant tweets on Twitter to address the RQ and related hypothesis. Twitter not only has a large user base, but also  the widest acceptance in the financial community and all tweets and user information are accessible via the website’s application programming interface (API). Users have developed several syntax elements to structure the information flow, which makes it easier to find relevant tweets via e.g. hashtags(#). On Twitter, traders use the convention of tagging stock-related messages by a dollar sign continued by the relevant ticker symbol of that stock e.g., ‘$AAPL’. 
+
+To limit the data’s exposure to singular events and trends, I have gather tweets covering a period of 2 years. The chosen period is from 2018-01-01 to 2019-12-31, as it is still considered current while it allows me to deal with stable developments on the US financial markets and avoid the repercussions caused by the global pandemic of COVID-19.
+
+Currently I have been able to collect 97.287 tweets from the period. All the tweets are written in the English language and related to S&P500 index. The S&P500 index is chosen to adequately reflect the wide spectrum of US companies and their industries.
+
+## Stock market data
+
+The financial data is gathered from Yahoo Finance covering the same period. For the price I will use the closing price for each day. 
+
+
+# Data preparation 
+
+## Loading in data and removing irrelevant variables
+
+```{r}
+# setting directory
+setwd("C:/Users/Danie/Dropbox/Daniel/Universitet/8 Semester/Data Science Project/The project/Data science project")
+
+# Loading twitter data
+tweets_df <- read.csv("TweetsHist.csv")
+
+# Loading stock data
+library(readr)
+sp500_df <- read.csv("S&P500.csv", sep = ";")
+
+# Twitter data
+str(tweets_df)
+```
+
+```{r}
+# Removing variable X from tweets_df
+tweets_df <- tweets_df[,-1]
+```
+
+
+```{r}
+# SP500 data
+str(sp500_df)
+```
+
+Of these variables we are only interested in `Date`, `Volume`, and `Close`.
+
+```{r}
+# removing irrelevant variables
+sp500_df <- sp500_df[,-c(2:4)]
+sp500_df$Adj.Close.. <- NULL
+```
+
+
+## Sorting out retweets
+
+```{r}
+table(tweets_df$type)
+```
+
+Alot of the tweets are actually retweets. I am only interested in the original tweet, so I avoid redundant data. I will take into consideration if a message was retweeted and to what degree in the further analysis. 
+
+```{r}
+tweets_df <- subset(tweets_df, type!="retweeted")
+table(tweets_df$type)
+```
+
+
+
+## Aligning the dates
+
+While data gathered for analysis is daily, the trading of stocks and other securities is only open during certain time frames on weekdays with the exception of certain holidays. Therefore, I have to take into account if messages were tweeted before, during, or after trading hours of NASDAQ which are from 13:30 – 20:00  UTC. I align tweets posted after 20:00 to the following day of trading. In more specific terms, tweets posted after the closing time of the market will be included together with pre-market tweets, since these messages can only affect the market that day. This will naturally result in a larger tweet volume on Mondays, as they will be assigned all the tweets between Friday 20:00 and Sunday 23:59 UTC.
+
+```{r message=FALSE, warning=FALSE}
+# Assigning tweets to the next day if they were posted after 20:00 UTC
+tweets_df$Date_Time <- as.POSIXct(tweets_df$created_at.x,"%Y-%M-D %H:%M:%S")
+mask <- as.integer(format(tweets_df$Date_Time, "%H")) > 20
+tweets_df$Date_Time <- as.Date(tweets_df$Date_Time)
+tweets_df$Date_Time[mask] <- tweets_df$Date_Time[mask] + 1 
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Checking how many tweets were posted in a weekend
+library(chron)
+tweets_df$Is_Weekend <- is.weekend(tweets_df$Date_Time)
+sum(tweets_df$Is_Weekend==TRUE)
+```
+
+2.700 tweets were posted in the weekend. 
+
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+# Creating a variable for name of the day
+tweets_df$Date_Name <- weekdays(tweets_df$Date_Time)
+
+# Assigning tweets from weekends to a monday
+tweets_df$Date_Time <- case_when(tweets_df$Date_Name == "lørdag" ~ tweets_df$Date_Time + 2, 
+                                 tweets_df$Date_Name == "søndag" ~ tweets_df$Date_Time + 1, 
+                                 TRUE ~ tweets_df$Date_Time)
+
+# lets check if we have any weekends left in our data set
+tweets_df$Is_Weekend <- is.weekend(tweets_df$Date_Time)
+sum(tweets_df$Is_Weekend==TRUE)
+```
+
+Now all tweets have been assigned dates/days, which are in alignment with the stock markets opening hours. But, we still have to check the period for any holidays, where the stock market could have been closed. 
+
+```{r}
+# Extracting unique dates from both data sets
+sp500_date <- sp500_df$Date
+Tweet_date <- unique(tweets_df$Date_Time) 
+
+# converting to common type
+sp500_date <- as.character(sp500_date)
+Tweet_date <- as.character(Tweet_date)
+
+#  Returns the dates, which are not present in the stock data, but are present in the twitter data
+setdiff(Tweet_date, sp500_date)
+```
+
+```{r}
+# And now I specify how many days the tweets on the holidays has to be changed with
+tweets_df$Date_Time <- case_when(
+  tweets_df$Date_Time == "2019-12-25" ~ tweets_df$Date_Time + 1, 
+  tweets_df$Date_Time == "2019-11-28" ~ tweets_df$Date_Time + 1,
+  tweets_df$Date_Time == "2019-09-02" ~ tweets_df$Date_Time + 1,
+  tweets_df$Date_Time == "2019-07-04" ~ tweets_df$Date_Time + 1,
+  tweets_df$Date_Time == "2019-05-27" ~ tweets_df$Date_Time + 1,
+  tweets_df$Date_Time == "2019-04-19" ~ tweets_df$Date_Time + 3,
+  tweets_df$Date_Time == "2019-02-18" ~ tweets_df$Date_Time + 1,
+  tweets_df$Date_Time == "2019-01-21" ~ tweets_df$Date_Time + 1,
+  tweets_df$Date_Time == "2019-01-01" ~ tweets_df$Date_Time + 1,
+  tweets_df$Date_Time == "2018-12-25" ~ tweets_df$Date_Time + 1,
+  tweets_df$Date_Time == "2018-12-05" ~ tweets_df$Date_Time + 1,
+  tweets_df$Date_Time == "2018-11-22" ~ tweets_df$Date_Time + 1,
+  tweets_df$Date_Time == "2018-09-03" ~ tweets_df$Date_Time + 1,
+  tweets_df$Date_Time == "2018-07-04" ~ tweets_df$Date_Time + 1,
+  tweets_df$Date_Time == "2018-05-28" ~ tweets_df$Date_Time + 1,
+  tweets_df$Date_Time == "2018-03-30" ~ tweets_df$Date_Time + 3,
+  tweets_df$Date_Time == "2018-02-19" ~ tweets_df$Date_Time + 1,
+  tweets_df$Date_Time == "2018-01-15" ~ tweets_df$Date_Time + 1,
+  tweets_df$Date_Time == "2018-01-01" ~ tweets_df$Date_Time + 1,
+  TRUE ~ tweets_df$Date_Time
+  )
+
+tweets_df$Date_Time <- as.character(tweets_df$Date_Time)
+```
+
+## Preparing dependt variable
+
+Due to the nature of my project, I want to know what days the price is "up" and "down" on the stock. Therefore, I create a new variable that measures the difference between the stock price each day. Based on this information, I will be able to create a binary variable that classifies each day as positive or negative in its price development. 
+
+```{r message=FALSE, warning=FALSE}
+# Using `Delt` we calculate the k-period percent difference within the Close series
+require(quantmod)
+sp500_df$Close. <- as.numeric(sp500_df$Close.)
+sp500_df$Return <- Delt(sp500_df$Close.)
+
+# Creating a binary variable to tell if the price is up or down
+sp500_df$Up <- ifelse(sp500_df$Return>0,1,0)
+```
+
+
+## Preparing the text from tweets
+
+```{r}
+tweets_df$text <- gsub("&amp","",tweets_df$text) #removes ampersand
+tweets_df$text <- gsub("@\\w+","", tweets_df$text) #remove @ followed by any word characters
+tweets_df$text <- gsub("[[:punct:]]","", tweets_df$text) #remove punctuation characters : !"#$%&â()*+,-./:;<=>?@[]^_`{|}~
+tweets_df$text <- gsub("[[:digit:]]+\\s","", tweets_df$text) #remove numbers until break
+tweets_df$text <- gsub("http\\w+","", tweets_df$text) #removes matches with http and word characters preceding it
+tweets_df$text <- gsub("[ \t]{2,}"," ", tweets_df$text) #match tab if it appears at least 2 times and replace with space
+tweets_df$text <- gsub("[[:digit:]]+","", tweets_df$text) 
+
+# Remove all non-ASCII characters
+tweets_df$text <- iconv(tweets_df$text, "UTF-8", "ASCII", sub="")
+
+#delete empty text column
+tweets_df <- tweets_df %>% na_if("") %>% na_if(" ") %>% na.omit()
+
+```
+
+Finally I tokenize each tweet in my data set and save it as a new data frame. 
+
+```{r message=FALSE, warning=FALSE}
+#new df with words separated
+library(tidytext)
+tweet_words <- tweets_df %>%
+  unnest_tokens(word, text) %>% 
+  anti_join(stop_words)
+
+tweet_words
+```
+
+
+# Simple sentiment analysis 
+
+## Choice of lexicon
+
+The choice of lexicon for analysis of your text data can have an impact on your final analysis. Therefore, for this analysis I consider the following three lexicons: `Bing`, `Afinn`, and `Syuzhet`. 
+
+```{r}
+library(syuzhet)
+#BING:
+tweet_words$bing <- get_sentiment(tweet_words$word,method="bing") #negative, positive
+
+score.bing <- tweet_words %>% 
+  group_by(Date_Time) %>% 
+  summarise(sentiment.pos =sum(bing==1),sentiment.neg= sum(bing==-1)) %>% 
+  mutate(score=(sentiment.pos-sentiment.neg))
+
+#AFINN:
+tweet_words$afinn <- get_sentiment(tweet_words$word,method="afinn") 
+#-5, -4, -3...., 3, 4, 5
+
+score.afinn <- tweet_words %>% 
+  group_by(Date_Time) %>% 
+  summarise(score =sum(afinn))
+
+#Syuzhet:
+tweet_words$syuzhet <- get_sentiment(tweet_words$word, method="syuzhet")
+
+score.syuzhet <- tweet_words %>% 
+  group_by(Date_Time) %>% 
+  summarise(score =sum(syuzhet))
+
+#See all sentiment scores:
+sentiment.score <- data.frame(
+  syuzhet.score=score.syuzhet$score, 
+  bing.score=score.bing$score, 
+  afinn.score=score.afinn$score,
+  date=score.bing$Date_Time
+  )
+
+sentiment.score
+```
+
+```{r}
+
+str(df)
+```
+
+
+
+```{r message=FALSE, warning=FALSE}
+# Merging the scores pr month
+library(tidyverse)
+library(dplyr)
+library(lubridate)
+
+sentiment.score$date <- as.Date(sentiment.score$date,"%Y-%M-D")
+
+df <- sentiment.score %>% 
+  group_by(month = floor_date(date, unit = "month")) %>% 
+  summarise(avg.afinn = mean(afinn.score), 
+            avg.bing = mean(bing.score),
+            avg.syuzhet = mean(syuzhet.score))
+
+# Plotting all monthlt avg. sentiment scores together
+library(ggplot2)
+ggplot(df, aes(x = month, group = 1)) + 
+  geom_line(aes(y = avg.afinn, color = "Afinn")) + 
+  geom_line(aes(y = avg.syuzhet, color = "Syuzhet")) + 
+  geom_line(aes(y = avg.bing, color = "Bing")) + 
+  scale_color_manual(name = "Group",
+                     values = c( "Afinn" = "blue", "Syuzhet" = "red", "Bing" = "orange"),
+                     labels = c("Afinn", "Syuzhet", "Bing")) + 
+  ylab("Sentiment Score") + 
+  ggtitle("Sentiment score per month")
+```
+
+```{r}
+# plotting the daily sentiment scores
+ggplot(sentiment.score, aes(x = date, group = 1)) + 
+  geom_line(aes(y = afinn.score, color = "Afinn")) + 
+  geom_line(aes(y = syuzhet.score, color = "Syuzhet")) + 
+  geom_line(aes(y = bing.score, color = "Bing")) + 
+  scale_color_manual(name = "Group",
+                     values = c( "Afinn" = "blue", "Syuzhet" = "red", "Bing" = "orange"),
+                     labels = c("Afinn", "Syuzhet", "Bing")) + 
+  ylab("Sentiment Score") + 
+  ggtitle("Sentiment score per day")
+```
+
+
+From the plot you can see that the lexicons does not follow the same pattern in their scores. 
+
+In the following i create wordclouds for the negative and positive words, which is identified by the lexicons, to help me determine, which lexicon will be most appropriate for this particular data. 
+
+```{r}
+#Wordcloud Bing - negative
+library(wordcloud)
+set.seed(10)
+
+negative_words <- tweet_words %>%
+  filter(bing == "-1") %>%
+  group_by(word) %>%
+  tally
+
+#for title to plot
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, "Negative bing words")
+
+negative_words %>%
+  with(wordcloud(word, n, max.words = 50, colors =  c("#56B4E9", "#E69F00")))
+```
+
+
+```{r}
+# Wordcloud Bing - positive
+set.seed(10)
+
+positive_words <- tweet_words %>%
+  filter(bing == "1") %>%
+  group_by(word) %>%
+  tally
+
+#for title to plot
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, "Positive bing words")
+
+positive_words %>%
+  with(wordcloud(word, n, max.words = 50, colors =  c("#56B4E9", "#E69F00")))
+```
+
+```{r}
+#wordcloud syuzhet - negative
+negative_words_syuz <- tweet_words %>% 
+  filter(syuzhet<0) %>% 
+  group_by(word) %>% 
+  tally
+
+#for title to plot
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, "Negative Syuzhet words")
+
+
+negative_words_syuz %>% 
+  with(wordcloud(word, n, max.words = 50, colors =  c("#56B4E9", "#E69F00")))
+```
+
+
+```{r}
+#wordcloud syuzhet - positive
+set.seed(10)
+
+positive_words_syuz <- tweet_words %>% 
+  filter(syuzhet>0) %>% #words with value bigger than 0
+  group_by(word) %>% 
+  tally
+
+#for title to plot
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, "Positive Syuzhet words")
+
+positive_words_syuz %>% 
+  with(wordcloud(word, n, max.words = 50, colors =  c("#56B4E9", "#E69F00")))
+```
+
+```{r}
+#wordcloud Afinn - negative
+negative_words_afinn <- tweet_words %>% 
+  filter(afinn<0) %>% 
+  group_by(word) %>% 
+  tally
+
+#for title to plot
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, "Negative Afinn words")
+
+negative_words_afinn %>% 
+  with(wordcloud(word, n, max.words = 50, colors =  c("#56B4E9", "#E69F00")))
+```
+
+```{r}
+#wordcloud Afinn - positive
+positive_words_afinn <- tweet_words %>% 
+  filter(afinn>0) %>% 
+  group_by(word) %>% 
+  tally
+
+#for title to plot
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, "Positive Afinn words")
+
+positive_words_afinn %>% 
+  with(wordcloud(word, n, max.words = 50, colors =  c("#56B4E9", "#E69F00")))
+```
+
+
+From the previous plots, I notice that the syuzhet lexicon includes the word "bullish" as one of its negative words. Within trading and the stock market, this particular word is used when share prices rises. Therefore, this should be a very positive word, and mean the particular tweet is positive. In the bing lexicon, this word is characterized as positive. 
+
+Therefore, I should not use the syuzhet lexicon for my further analysis. 
+
+Afinn and Bing have more of the same words and follow more or less the same pattern in the first graph. But clearly Bing puts alot of consideration into tweets containing the word "trump", where Afinn looks on other words. Another difference between the two lexicon is the way they score the words sentiment. Bing scores either -1 (negative) or 1 (positive), whereas the Afinn lexicon scores the words on a index between -5 to 5, giving a much more nuanced picture of the sentiment. Therefore, I choose to use the Afinn lexicon in my further analysis. 
+
+## Grouping sentiment value for each tweet
+
+```{r}
+tweets_df <- tweet_words %>% 
+  group_by(id_tweet) %>% 
+  summarise(total_afinn=sum(afinn)) %>% 
+  merge(tweets_df,total_afinn,by.x="id_tweet",by.y = "id_tweet",all.x = TRUE,all.y = TRUE) %>% 
+  relocate(total_afinn,.after=last_col())
+
+tweets_df$total_afinn <- as.factor(tweets_df$total_afinn)
+
+plot(tweets_df$total_afinn)
+```
+
+```{r}
+# Displaying the score for each day
+sentiment.score %>% 
+  ggplot(mapping = aes(x = date, y = afinn.score, fill = afinn.score)) +
+    geom_bar(alpha = 0.8, stat = "identity") +
+    labs(y = "Sentiment Score", x = "Date", fill = "Sentiment") +
+    ggtitle("Sentiment Score by Date - Afinn") +
+    coord_flip()
+```
+
+# Sentiment vs. stock price movement
+
+```{r}
+# Ensuring date format is the same
+sentiment.score$date <- as.character(sentiment.score$date)
+# Merging the sentiment scores with the stock data
+sp500_df <- sp500_df %>% 
+  left_join(sentiment.score, by = c("Date" = "date"))
+
+# removing the syuzhet and bing scores
+sp500_df$bing.score <- NULL
+sp500_df$syuzhet.score <- NULL
+```
+
+
+```{r}
+
+plot1 <- sp500_df %>% 
+ggplot(aes(x=Date, y=Close., group=1)) +
+    geom_line() +
+    geom_point() + labs(x="Trading Day", y="Closing Price", title = "S&P500 Closing Stock Price", subtitle = "Between January 1, 2018 - December 31, 2019")
+
+plot2 <- sp500_df %>% 
+ggplot(aes(x=Date, y=afinn.score, group=1)) +
+    geom_line() +
+    geom_point() + labs(x="Trading Day", y="Afinn Sentiment", title = "Sentiment Towards Nasdaq100", subtitle = "Between January 1, 2018 - December 31, 2019")
+
+library(gridExtra)
+grid.arrange(plot1, plot2, nrow = 2)
+```
+
+
+```{r}
+# Creating a z-score for the stock price and the sentiment score to be able to compare them. 
+sp500_df <- sp500_df %>% 
+  mutate(z_score_afinn = (afinn.score - mean(afinn.score))/sd(afinn.score)) %>% 
+  mutate(z_score_stocks = (Close. - mean(Close.))/sd(Close.))
+
+# Plotting the z-scores
+ggplot(sp500_df, aes(x = Date, group = 1)) + 
+  geom_line(aes(y = z_score_afinn, color = "Afinn sentiment")) + 
+  geom_line(aes(y = z_score_stocks, color = "Stock price movement")) +
+   scale_color_manual(name = "Group",
+                     values = c( "Afinn sentiment" = "darkblue", 
+                                 "Stock price movement" = "darkred"),
+                     labels = c("Afinn sentiment", "Stock price movement")) +
+  ylab("z_Score") + 
+  ggtitle("Stock price and Sentiment pr. day")
+```
+
+When looking at the plot, I am able to see a pattern between the price fluctuation of the S&P500 index and the observed sentiment of the tweets in some areas. In some cases they move in parallel, while in other the sentiment could arguably look as it was deterministic. But, this remain to be proven. Another possibility is that it is the price movement of S&P500 index, which determines the sentiment of the tweets. 
+
+## Logistic Regression
+
+```{r}
+# Splitting the data 60/40
+set.seed(1)
+split <- sample(c(1:503), 302)
+
+sp500_df <- na.omit(sp500_df)
+
+sp500_train <- sp500_df[split,]
+sp500_test <- sp500_df[-split,]
+
+# Splitting dependent variable
+Up_train <- sp500_df$Up[split]
+Up_test <- sp500_df$Up[-split]
+
+```
+
+
+```{r}
+# Logistic regression 
+glm.fit <- glm(Up~afinn.score, data = sp500_train, family = binomial)
+summary(glm.fit)
+```
+
+
+```{r}
+library(caret)
+glm.pred <- predict(glm.fit, sp500_test, type = "response")
+
+confusionMatrix(factor(ifelse(glm.pred>0.5,1,0)), factor(Up_test),positive = "1")
+```
+
+## Boosting
+
+```{r}
+library(gbm)
+set.seed(1)
+
+boost.daily = gbm(Up~afinn.score, data = sp500_train, distribution = "bernoulli", n.trees = 5000)
+boost.probs = predict(boost.daily, newdata = sp500_test, n.trees = 5000)
+boost.pred = ifelse(boost.probs > 0.5, 1, 0)
+
+table(sp500_test$Up, boost.pred)
+```
+
+```{r}
+# Classification error for boosting
+1-(95+10)/200
+```
+
+
+
+# Conclusions (so far)
+
++ With a basic sentiment analysis, I am focusing on the meaning of the words and phrases. I only obtain information about the particular word, if it is positive or negative. This approach is very suitable for analysis of short sentences that often characterizes tweets and other social media posts. An obvious drawback with this approach is however that the sentiment score does not reflect proper sentiment when e.g. negation is part of the sentence. To accommodate this, I should rather do a sentiment analysis on sentences as a whole. This could be done with bidrirectional RNN's like LTSM or GRU in deep learning, but for the scope of this project it would be computational overkill. 
+
++ The logistic regression currently displays a poor performance with only 53.23% accuracy, which however is better than random guessing. This can however not entirely be trusted, due to the fact the model gets 100% in specificity, but 0% in sensitivity. I can perhaps improve the accuracy by conducting some variable transformation, introducing lags, and even trying to run other models such as Support vector machines. 
+
++ Currently I do not take into account if the tweets are "human-validated". In other words, the tweets are not posted by bots. If there exists a large proportion of bots tweeting about the S&P500 index, this could mess up the sentiment score, as they would potentially not reflect the true sentiment of that particular day. 
+
++ As of now, the graphs and models suggests that the stock price movement is independent of the sentiment displayed on social media (Twitter). There might however be other influential factors that could affect the stock price direction, such as dividends, earnings per share, cash flow etc. 
+
